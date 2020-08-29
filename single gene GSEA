@@ -1,0 +1,132 @@
+
+rm(list = ls())
+load("linc_tumor_rowcount.Rda")
+head(dd)[1:5, 1:3]
+dim(dd)
+sggsea<-function(data,gene,method="l", group ="m",pvalue=0.05,geneset="c2"){
+  options(digits = 10)
+  if(method=="p"){
+    data<-limma::voom(data)$E
+    p<-function(gene,z){ee<-cor(data[gene,],data[z,], method = "pearson")}
+    rr<-sapply(rownames(data),p,gene)
+    geneList<- sort(rr,decreasing = TRUE)
+  }
+  
+  if(method=="s"){
+    p<-function(gene,z){ee<-cor(data[gene,],data[z,], method = "spearman")}
+    rr<-sapply(rownames(data),p,gene)
+    geneList<- sort(rr,decreasing = TRUE)
+  }
+  
+  if(method=="l"){
+    if(!require("limma")) BiocManager::install("limma",update = F,ask = F)
+    if(!require("edgeR")) BiocManager::install("edgeR",update = F,ask = F)
+    library(limma)
+    if(group=="q"){
+      colname_high<-colnames(data[,data[gene,] >= quantile(data[gene,])[4]])
+      colname_low<-colnames(data[,data[gene,] < quantile(data[gene,])[2]])
+    }else{
+      colname_high<-colnames(data[,data[gene,] >= quantile(data[gene,])[3]])
+      colname_low<-colnames(data[,data[gene,] < quantile(data[gene,])[3]]) 
+    }
+    group<-as.factor(ifelse(colnames(data) %in% colname_high, "high", ifelse(colnames(data) %in% colname_low,"low","median")))
+    design<-model.matrix(~0+group)
+    contrast.matrix <- makeContrasts (contrasts = c("grouphigh-grouplow"), levels = design)
+    y <- edgeR::DGEList(counts=data,group=group) 
+    y <- edgeR::calcNormFactors(y,method="TMM") 
+    data<-voom(y,design = design)
+    fit1 <- contrasts.fit(lmFit(data, design), contrast.matrix)
+    fit2 <- eBayes(fit1)
+    dif <- topTable(fit2,number = 1000000) 
+    geneList<-dif[,1]
+    names(geneList)<-as.character(row.names(dif))
+    geneList<- sort(geneList,decreasing = TRUE)
+  }
+  if(method=="d"){
+    if(!require("DESeq2")) BiocManager::install("DESeq2",update = F,ask = F)
+    library(DESeq2)
+    if(group=="q"){
+      colname_high<-colnames(data[,data[gene,] >= quantile(data[gene,])[4]])
+      colname_low<-colnames(data[,data[gene,] < quantile(data[gene,])[2]])
+    }else{
+      colname_high<-colnames(data[,data[gene,] >= quantile(data[gene,])[3]])
+      colname_low<-colnames(data[,data[gene,] < quantile(data[gene,])[3]]) 
+    }
+    condition<-as.factor(ifelse(colnames(data) %in% colname_high, "high", ifelse(colnames(data) %in% colname_low,"low","median")))
+    colData <- data.frame(row.names=colnames(data), condition)
+    dds <- DESeqDataSetFromMatrix(round(data), colData, design= ~condition)
+    dds <- DESeq(dds)
+    res<- results(dds,contrast=c("condition","high","low"),independentFiltering=FALSE)
+    geneList<-res[,2]
+    names(geneList)<-as.character(row.names(res))
+    geneList<- sort(geneList,decreasing = TRUE)
+  } 
+  if(method=="e"){
+    if(!require("edgeR")) BiocManager::install("edgeR",update = F,ask = F)
+    library(edgeR)
+    if(group=="q"){
+      colname_high<-colnames(data[,data[gene,] >= quantile(data[gene,])[4]])
+      colname_low<-colnames(data[,data[gene,] < quantile(data[gene,])[2]])
+    }else{
+      colname_high<-colnames(data[,data[gene,] >= quantile(data[gene,])[3]])
+      colname_low<-colnames(data[,data[gene,] < quantile(data[gene,])[3]]) 
+    }
+    group<-as.factor(ifelse(colnames(data) %in% colname_high, "high", ifelse(colnames(data) %in% colname_low,"low","median")))
+    design <- model.matrix(~group) #把group设置成一个model matrix#
+    y <- DGEList(counts=data,group=group) 
+    y <- calcNormFactors(y,method="TMM") 
+    y <- estimateDisp(y)
+    et <- exactTest(y,pair = c("low","high"))
+    geneList <- et$table[,1] 
+    names(geneList)<-as.character(row.names(et$table))
+    geneList<- sort(geneList,decreasing = TRUE)
+    
+  } 
+  if(!require("clusterProfiler")) BiocManager::install("clusterProfiler",update = F,ask = F)
+  library(clusterProfiler)
+  if(geneset=="h"){
+    genesets <- read.gmt("h.all.v6.2.symbols.gmt")
+  }
+  if(geneset=="c2"){
+    genesets <- read.gmt("c2.cp.kegg.v6.2.symbols.gmt")
+  }
+  if(geneset=="c4"){
+    genesets <- read.gmt("c4.cgn.v6.2.symbols.gmt")
+  }
+  if(geneset=="c5"){
+    genesets <- read.gmt("c5.all.v6.2.symbols.gmt")
+  }
+  if(geneset=="c6"){
+    genesets <- read.gmt("c6.all.v6.2.symbols.gmt")
+  }
+  egmt<- GSEA(geneList, 
+                  TERM2GENE = genesets, 
+                  exponent = 1, 
+                  nPerm = 1000, 
+                  minGSSize = 10,
+                  maxGSSize = 500, 
+                  pvalueCutoff = pvalue, 
+                  pAdjustMethod = "BH",
+                  verbose = TRUE, 
+                  seed = TRUE,
+                  by = "fgsea")
+  return(egmt)
+}
+
+library(ggplot2)
+
+egmt_lm<-sggsea(data=dd, gene="xx",method="l",pvalue=0.05,group="m",geneset= "h")
+egmt_lq<-sggsea(data=dd, gene="xx",method="l",pvalue=0.05,group="q",geneset= "h")
+lmq<-merge(as.data.frame(egmt_lm),as.data.frame(egmt_lq), by= "ID",suffixes = c(".lm", ".lq"))
+ggplot(lmq, aes(abs(NES.lm), abs(NES.lq))) + geom_point()+geom_smooth(method="glm")+geom_abline()+geom_jitter()+xlim(1, 3) + ylim(1, 3)
+enrichplot::gseaplot2(egmt_lm,geneSetID = 1:5,pvalue_table = FALSE)
+enrichplot::ridgeplot(egmt_lm,showCategory = 100)
+enrichplot::dotplot(egmt_lm,showCategory = 100)
+
+genes<-c("xxx","xxx","xxx")
+egmtM<- lapply(data= dd, genes,method="l",group="m",geneset= "h",pvalue=0.05, sggsea)
+
+enrichplot::gseaplot2(egmtM[[1]],geneSetID = 1:5,pvalue_table = FALSE)
+enrichplot::ridgeplot(egmtM[[1]],showCategory = 10)
+
+
